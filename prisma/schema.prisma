@@ -1,0 +1,263 @@
+// Mi Recetario — Prisma schema
+// Dev: SQLite. Para migrar a PostgreSQL cambiar `provider` a "postgresql"
+// y DATABASE_URL. Los tipos usados son compatibles con ambos motores.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Autenticación (NextAuth / Auth.js) — un solo usuario
+// ---------------------------------------------------------------------------
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  passwordHash  String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts     Account[]
+  sessions     Session[]
+  recipes      Recipe[]
+  collections  Collection[]
+  mealPlans    MealPlanEntry[]
+  shoppingList ShoppingListItem[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ---------------------------------------------------------------------------
+// Dominio: recetas
+// ---------------------------------------------------------------------------
+
+enum RecipeStatus {
+  WANT_TO_COOK // Quiero hacer
+  COOKED // Ya hice
+  EXCELLENT // Excelente
+  DISLIKED // No me gustó
+}
+
+model Recipe {
+  id          String  @id @default(cuid())
+  userId      String
+  title       String
+  description String?
+  imageUrl    String?
+  videoUrl    String?
+  author      String?
+
+  // Origen — nunca se pierde la URL original
+  sourceUrl String
+  sourceType String @default("instagram") // instagram | web | manual
+
+  // Metadatos de cocina
+  prepMinutes Int?
+  cookMinutes Int?
+  totalMinutes Int?
+  servings    Int?
+  difficulty  String? // easy | medium | hard
+  mealType    String? // desayuno | almuerzo | cena | postre | snack
+
+  // Estado / valoración / favorito
+  status    RecipeStatus @default(WANT_TO_COOK)
+  rating    Int? // 1..5
+  ratedAt   DateTime?
+  isFavorite Boolean     @default(false)
+
+  // IA
+  aiSummary   String?
+  aiProcessed Boolean @default(false)
+
+  // Historial de cocinado
+  timesCooked Int?      @default(0)
+  lastCookedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user         User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ingredients  Ingredient[]
+  steps        Step[]
+  notes        Note[]
+  tags         TagsOnRecipes[]
+  collections  RecipesOnCollections[]
+  cookLogs     CookLog[]
+  mealPlans    MealPlanEntry[]
+  shoppingRefs ShoppingListItem[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([isFavorite])
+}
+
+model Ingredient {
+  id       String  @id @default(cuid())
+  recipeId String
+  name     String
+  quantity String? // "200", "1/2", null
+  unit     String? // g, ml, taza, cda...
+  raw      String? // texto original sin parsear
+  position Int     @default(0)
+
+  recipe Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+
+  @@index([recipeId])
+  @@index([name])
+}
+
+model Step {
+  id       String @id @default(cuid())
+  recipeId String
+  position Int
+  content  String
+
+  recipe Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+
+  @@index([recipeId])
+}
+
+model Note {
+  id        String   @id @default(cuid())
+  recipeId  String
+  content   String
+  createdAt DateTime @default(now())
+
+  recipe Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+
+  @@index([recipeId])
+}
+
+model Tag {
+  id      String          @id @default(cuid())
+  name    String          @unique
+  color   String?
+  recipes TagsOnRecipes[]
+}
+
+model TagsOnRecipes {
+  recipeId String
+  tagId    String
+
+  recipe Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  tag    Tag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([recipeId, tagId])
+  @@index([tagId])
+}
+
+model Collection {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String
+  description String?
+  emoji       String?
+  color       String?
+  coverUrl    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user    User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recipes RecipesOnCollections[]
+
+  @@unique([userId, name])
+  @@index([userId])
+}
+
+model RecipesOnCollections {
+  recipeId     String
+  collectionId String
+  addedAt      DateTime @default(now())
+
+  recipe     Recipe     @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  collection Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+
+  @@id([recipeId, collectionId])
+  @@index([collectionId])
+}
+
+// Historial de veces cocinada
+model CookLog {
+  id        String   @id @default(cuid())
+  recipeId  String
+  cookedAt  DateTime @default(now())
+  note      String?
+
+  recipe Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+
+  @@index([recipeId])
+}
+
+// Planificador semanal
+model MealPlanEntry {
+  id        String   @id @default(cuid())
+  userId    String
+  recipeId  String
+  date      DateTime // día del plan (normalizado a 00:00)
+  meal      String   @default("cena") // desayuno | almuerzo | cena | snack
+  position  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recipe Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+
+  @@index([userId, date])
+}
+
+// Lista de compras consolidada
+model ShoppingListItem {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  quantity  String?
+  unit      String?
+  checked   Boolean  @default(false)
+  recipeId  String? // origen (opcional)
+  createdAt DateTime @default(now())
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recipe Recipe? @relation(fields: [recipeId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+}
